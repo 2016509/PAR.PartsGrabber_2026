@@ -1,0 +1,98 @@
+﻿################################################################################
+# Данный GITIGNORE-файл был автоматически создан Microsoft(R) Visual Studio.
+################################################################################
+
+/GoogleModelUpdater/appsettings.json
+
+############################
+# Build artifacts
+############################
+bin/
+obj/
+[Bb]uild/
+[Ll]og/
+[Tt]est[Rr]esult*/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+*.log
+
+############################
+# Visual Studio files
+############################
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+############################
+# NuGet
+############################
+packages/
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+.nuget/
+
+############################
+# Rider / VS Code / JetBrains
+############################
+.idea/
+.ReSharper*/
+*_ReSharper.*/
+*.DotSettings.user
+.vscode/
+
+############################
+# Temporary / cache
+############################
+*.tmp
+*.temp
+*.bak
+*.old
+*.cache
+*.swp
+*.swo
+
+############################
+# Publish / deployment
+############################
+publish/
+*.Publish.xml
+
+############################
+# Coverage / tests
+############################
+TestResults/
+*.coverage
+*.coveragexml
+*.trx
+
+############################
+# OS-specific
+############################
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+############################
+# Tooling / others
+############################
+*.orig
+*.rej
+*.patch
+*.sln.iml
+
+/appsettings.json
+/.cr/personal/FavoritesList

@@ -21,7 +21,7 @@
 
 ## Входные данные
 
-### Конфиг (appsettings.json)
+### Конфиг 
 - `ApiService` (BaseUrl и набор URL’ов эндпойнтов).
 - `Module.Interval` — интервал между проходами.
 - `SitesToParse`, `SitesToCheckProxy` (опционально, под выборку/проверку сайтов).

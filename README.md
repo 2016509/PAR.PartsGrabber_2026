@@ -103,15 +103,15 @@
 текст
 ⏰ ПРОЦЕСС ЗАПУСКАЕТСЯ КАЖДЫЙ Interval секунд (напр. 300s)
 
-1. СТАРТ → ПРОВЕРКА ПРОКСИ + САЙТОВ (CheckProxyResult)
-текст
+[1. СТАРТ → ПРОВЕРКА ПРОКСИ + САЙТОВ (CheckProxyResult)
+
 ProcessService.Process() [каждые 300s]
 │
 └── CheckProxyService.CheckProxies(proxies, partSources)
 ├── GET [https://partselect.com/](https://partselect.com/) → Proxy1 → 200 OK → ✅ partselect.com: [Proxy1]
 ├── GET [https://partsdr.com/](https://partsdr.com/) → Proxy1 → 403 CF → Playwright → 200 → ✅ partsdr.com: [Proxy1]
 ├── GET [https://amazon.com/](https://amazon.com/) → Proxy1 → 503 → Proxy2 → 200 → ✅ amazon.com: [Proxy2]
-└── GET [https://xpartsupply.com/](https://xpartsupply.com/) → Proxy1 → 200 → ✅ xpartsupply.com: [Proxy1]
+└── GET [https://xpartsupply.com/](https://xpartsupply.com/) → Proxy1 → 200 → ✅ xpartsupply.com: [Proxy1]]
 
 ✅ РЕЗУЛЬТАТ: CheckProxyResult[9 сайтов] с рабочими прокси
 2. API ХВОСТ → БЕРЁМ ЗАПИСИ НА ПАРСИНГ (Статус=0)

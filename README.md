@@ -99,11 +99,15 @@
 - Для остановки нажмите `ESC` в окне консоли.
 
 
-БИЗНЕС-ЛОГИКА PartsGrabber — ПОЛНЫЙ ЦИКЛ РАБОТЫ
-⏰ ПРОЦЕСС ЗАПУСКАЕТСЯ КАЖДЫЙ Interval секунд (напр. 300s)
+# БИЗНЕС-ЛОГИКА PartsGrabber — ПОЛНЫЙ ЦИКЛ РАБОТЫ
 
-1. Старт → проверка прокси и сайтов (CheckProxyResult)
-text
+⏰ ПРОЦЕСС ЗАПУСКАЕТСЯ КАЖДЫЙ `Interval` секунд (напр. 300s)
+
+---
+
+## 1. Старт → проверка прокси и сайтов (`CheckProxyResult`)
+
+```text
 ProcessService.Process() [каждые 300s]
 │
 └── CheckProxyService.CheckProxies(proxies, partSources)
@@ -111,21 +115,33 @@ ProcessService.Process() [каждые 300s]
     ├── GET https://partsdr.com/      → Proxy1 → 403 CF         → Playwright → 200 → ✅ partsdr.com: [Proxy1]
     ├── GET https://amazon.com/       → Proxy1 → 503            → Proxy2 → 200 → ✅ amazon.com: [Proxy2]
     └── GET https://xpartsupply.com/  → Proxy1 → 200 OK          → ✅ xpartsupply.com: [Proxy1]
-✅ РЕЗУЛЬТАТ: CheckProxyResult[9 сайтов] с рабочими прокси.
+```
 
-2. API хвост → берём записи на парсинг (Status = 0)
-text
+✅ **РЕЗУЛЬТАТ:** `CheckProxyResult[9 сайтов]` с рабочими прокси.
+
+---
+
+## 2. API хвост → берём записи на парсинг (`Status = 0`)
+
+```text
 _apiService.Get("/GetPartsWithStateUrl")
     → PartsAndReplace[] где Status = "0" (новые части)
-✅ Пример результата:
+```
 
-json
+✅ **Пример результата:**
+
+```json
 [
   { "Id": 123, "MainPartNumber": "WPW10381562", "Status": "0" },
   { "Id": 124, "MainPartNumber": "WPW10381561", "Status": "0" }
 ]
-3. Обработка каждой записи (пример: WPW10381562) → максимум 1 минута
-text
+```
+
+---
+
+## 3. Обработка каждой записи (пример: `WPW10381562`) → максимум 1 минута
+
+```text
 foreach (part in partsFromAPI)
 {
     using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(1));
@@ -154,10 +170,15 @@ foreach (part in partsFromAPI)
             ├── Replaces = ["WPW10381562", "WPW10381561"] (все уникальные)
             └── Status   = "2" (есть данные!) ✅
 }
-4. В случае если сайт прошёл ✅
-partsdr.com → CheckSiteResult.Valid:
+```
 
-text
+---
+
+## 4. В случае если сайт прошёл ✅
+
+`partsdr.com → CheckSiteResult.Valid`:
+
+```text
 ParsingPart {
   Name: "WPW10381562 Motor Assembly",
   Replaces: ["WPW10381561", "WPW10381563"],
@@ -168,10 +189,15 @@ ParsingPart {
 
 ↓ Save() → Archive + parts/pic/1/123/1.jpg
 ↓ PartSource.Status = true
-5. В случае если сайт не прошёл ❌
-xpartsupply.com → 8 attempts failed:
+```
 
-text
+---
+
+## 5. В случае если сайт не прошёл ❌
+
+`xpartsupply.com → 8 attempts failed`:
+
+```text
 ParsingPart {
   WithErrorToSave: true,  // ❌ Ошибка!
   AttempsCount: 8
@@ -180,44 +206,53 @@ ParsingPart {
 ↓ PartSource.Status = false
 ↓ ErrorLog: "Site xpartsupply.com not responding (timeout)"
 ↓ НЕ вызывается Save() → нет Archive
-6. Итоговый результат в БД (WPW10381562)
-PartsAndReplace:
+```
 
-Id	MainPartNumber	Status	PartName	Pic	PhotoStatus
-123	WPW10381562	"2"	"WPW10381562 Motor"	parts/pic/1/123/1.jpg	1
-PartSource (9 записей):
+---
 
-SourceName	Status	Confidence	AttempsCount
-partsdr.com	true	5	2
-partselect.com	true	5	1
-xpartsupply.com	false	4	8
-Archive:
+## 6. Итоговый результат в БД (`WPW10381562`)
 
-✅ PartsNamesArchive: 4 записи (Name с 4 сайтов)
+**PartsAndReplace:**
 
-✅ ReplacesArchive: 5 записей (все Replaces)
+| Id  | MainPartNumber | Status | PartName            | Pic                   | PhotoStatus |
+|:----|:---------------|:-------|:--------------------|:----------------------|:------------|
+| 123 | WPW10381562    | "2"    | "WPW10381562 Motor" | parts/pic/1/123/1.jpg | 1           |
 
-✅ PartsPicArchive: 12 записей (12 картинок)
+**PartSource (9 записей):**
 
-ErrorLog:
+| SourceName      | Status | Confidence | AttempsCount |
+|:----------------|:-------|:-----------|:-------------|
+| partsdr.com     | true   | 5          | 2            |
+| partselect.com  | true   | 5          | 1            |
+| xpartsupply.com | false  | 4          | 8            |
 
-✅ "Site xpartsupply.com not responding (timeout)"
+**Archive:**
 
-7. Цикл повторяется
-text
+- ✅ `PartsNamesArchive`: 4 записи (Name с 4 сайтов)
+- ✅ `ReplacesArchive`: 5 записей (все Replaces)
+- ✅ `PartsPicArchive`: 12 записей (12 картинок)
+
+**ErrorLog:**
+
+- ✅ "Site xpartsupply.com not responding (timeout)"
+
+---
+
+## 7. Цикл повторяется
+
+```text
 return DateTime.UtcNow.AddSeconds(_options.Interval); // +300s
 ↓ Следующая итерация → новые PartsAndReplace.Status = "0"
-📊 РЕЗЮМЕ БИЗНЕС-ЛОГИКИ
-CheckProxies → рабочие прокси для 9 сайтов ✅
+```
 
-API хвост → PartsAndReplace.Status = "0" → "WPW10381562" ✅
+---
 
-1min таймаут → 9 парсеров параллельно → partial results ✅
+## 📊 РЕЗЮМЕ БИЗНЕС-ЛОГИКИ
 
-Сайт прошёл → Archive + PartSource.Status = true ✅
-
-Сайт не прошёл → ErrorLog + PartSource.Status = false ✅
-
-Итоговый Status → "2" (partial данные) / "3" (пусто) ✅
-
-Повтор каждые 300s → следующий PartNumber ✅
+1. **CheckProxies** → рабочие прокси для 9 сайтов ✅  
+2. **API хвост** → `PartsAndReplace.Status = "0"` → "WPW10381562" ✅  
+3. **1min таймаут** → 9 парсеров параллельно → partial results ✅  
+4. **Сайт прошёл** → Archive + `PartSource.Status = true` ✅  
+5. **Сайт не прошёл** → ErrorLog + `PartSource.Status = false` ✅  
+6. **Итоговый Status** → `"2"` (partial данные) / `"3"` (пусто) ✅  
+7. **Повтор каждые 300s** → следующий `PartNumber` ✅

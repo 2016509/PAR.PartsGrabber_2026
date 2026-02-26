@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PAR.ParseLib;
+using PAR.ParseLib.Selenium;
+using PAR.PartsGrabber.Options;
 using Serilog;
 using System.Net;
 using ILogger = Microsoft.Extensions.Logging.ILogger;
@@ -14,6 +16,7 @@ namespace PAR.PartsGrabber
     {
         static async Task Main(string[] args)
         {
+            
             var services = Initialize();
             await using var serviceProvider = services.BuildServiceProvider();
 
@@ -114,6 +117,8 @@ namespace PAR.PartsGrabber
         {
             services.AddHttpClient<ApiService>();
             services.AddHttpClient<ProcessParsingResultService>();
+
+            services.AddHttpClient<ITelegramNotificationService, TelegramNotificationService>();
         }
 
         private static void ConfigureServices(ServiceCollection services)
@@ -125,6 +130,8 @@ namespace PAR.PartsGrabber
 
             // Singleton is OK: internal state is in-memory (leases/gates) and service holds pooled clients.
             services.AddSingleton<SiteProxyCheckerService>();
+            // глобальный pool!
+            services.AddSingleton<ProxiedHttpClientPool>();
 
             services.AddTransient<IParsersFactory, ParsersFactory>();
             services.AddTransient<ProcessParsingResultService>();
@@ -140,6 +147,8 @@ namespace PAR.PartsGrabber
             services.AddTransient<IParser, AmazonCOMParser>();
             services.AddTransient<IParser, AmazonCAParser>();
             services.AddTransient<IParser, SearsPartsDirectParser>();
+
+          
         }
 
         private static IConfigurationRoot ConfigureOptions(IServiceCollection services)
@@ -156,7 +165,7 @@ namespace PAR.PartsGrabber
             services.AddOptions<SitesToParseOptions>().Bind(configuration);
             services.AddOptions<SitesToCheckProxyOptions>().Bind(configuration);
             services.AddOptions<ModuleOptions>().Bind(configuration.GetSection(ModuleOptions.SectionName));
-
+            services.AddOptions<TelegramOptions>().Bind(configuration.GetSection(TelegramOptions.SectionName));
             return configuration;
         }
 

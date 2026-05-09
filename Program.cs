@@ -4,8 +4,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PAR.ParseLib;
+using PAR.ParseLib.Parsers;
 using PAR.ParseLib.Selenium;
 using PAR.PartsGrabber.Options;
+using Prometheus;
 using Serilog;
 using System.Net;
 using ILogger = Microsoft.Extensions.Logging.ILogger;
@@ -19,6 +21,15 @@ namespace PAR.PartsGrabber
             
             var services = Initialize();
             await using var serviceProvider = services.BuildServiceProvider();
+             // KestrelMetricServer
+            using var metricServer = new KestrelMetricServer(
+                hostname: "0.0.0.0", port: 9105, url: "/metrics"); // urlPath, не url!
+            metricServer.Start();
+
+            Console.WriteLine("🚀 PartsGrabber started!");
+            Console.WriteLine("📊 Metrics: http://localhost:9105/metrics");
+            var moduleMetrics = serviceProvider.GetRequiredService<ModuleMetrics>();
+            moduleMetrics.StartHealthCheck();
 
             var apiService = serviceProvider.GetRequiredService<IApiService>();
             var processService = serviceProvider.GetRequiredService<ProcessService>();
@@ -37,6 +48,7 @@ namespace PAR.PartsGrabber
             ServicePointManager.ServerCertificateValidationCallback = delegate { return true; };
             ServicePointManager.Expect100Continue = false;
             ServicePointManager.DefaultConnectionLimit = 100;
+
 
             try
             {
@@ -89,15 +101,14 @@ namespace PAR.PartsGrabber
                 }
                 catch (EntityNotFoundException)
                 {
-                    // No work found; schedule next run
                     nextRunUtc = DateTime.UtcNow.AddSeconds(Convert.ToDouble(moduleOptions.Value.Interval));
                 }
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Fatal error in main loop");
+                    moduleMetrics.ReportFatalError(); 
                     Environment.Exit(1);
                 }
-
                 await Task.Delay(200);
             }
         }
@@ -123,32 +134,43 @@ namespace PAR.PartsGrabber
 
         private static void ConfigureServices(ServiceCollection services)
         {
+            services.AddSingleton<DatabasePartsService>();  
+
             services.AddTransient<IApiService, ApiService>();
-
-            // One Playwright per process
+            services.AddSingleton<ModuleMetrics>();
             services.AddSingleton<PlaywrightFetcher>();
-
-            // Singleton is OK: internal state is in-memory (leases/gates) and service holds pooled clients.
             services.AddSingleton<SiteProxyCheckerService>();
-            // глобальный pool!
             services.AddSingleton<ProxiedHttpClientPool>();
 
             services.AddTransient<IParsersFactory, ParsersFactory>();
             services.AddTransient<ProcessParsingResultService>();
             services.AddTransient<ParseService>();
+           
+            // Регистрируем декоратор
+            services.AddTransient<IParseService>(sp =>
+             new CachedParseServiceDecorator(
+                 sp.GetRequiredService<ParseService>(),
+                 sp.GetRequiredService<DatabasePartsService>(),
+                 sp.GetRequiredService<ILogger<CachedParseServiceDecorator>>(),
+                 sp.GetRequiredService<ModuleMetrics>(),
+                 sp.GetRequiredService<IOptions<CacheOptions>>()  // ← Добавить эту строку
+             ));
+
             services.AddTransient<ProcessService>();
 
-            services.AddTransient<IParser, XPartSupplyParser>();
-            services.AddTransient<IParser, PartsDrParser>();
-            services.AddTransient<IParser, AppliancePartsHQParser>();
-            services.AddTransient<IParser, MajorAppliancePartsParser>();
-            services.AddTransient<IParser, PartSelectParser>();
-            services.AddTransient<IParser, EbayParser>();
-            services.AddTransient<IParser, AmazonCOMParser>();
-            services.AddTransient<IParser, AmazonCAParser>();
-            services.AddTransient<IParser, SearsPartsDirectParser>();
+            // Регистрация парсеров
+            var parserTypes = new[]
+            {
+        typeof(XPartSupplyParser), typeof(PartsDrParser), typeof(AppliancePartsHQParser),
+        typeof(MajorAppliancePartsParser), typeof(PartSelectParser), typeof(EbayParser),
+        typeof(AmazonCOMParser), typeof(AmazonCAParser), typeof(SearsPartsDirectParser),
+        typeof(ApWagnerParser), typeof(AppliancePartsProsParser)
+    };
 
-          
+            foreach (var parserType in parserTypes)
+            {
+                services.AddTransient(typeof(IParser), parserType);
+            }
         }
 
         private static IConfigurationRoot ConfigureOptions(IServiceCollection services)
@@ -166,6 +188,7 @@ namespace PAR.PartsGrabber
             services.AddOptions<SitesToCheckProxyOptions>().Bind(configuration);
             services.AddOptions<ModuleOptions>().Bind(configuration.GetSection(ModuleOptions.SectionName));
             services.AddOptions<TelegramOptions>().Bind(configuration.GetSection(TelegramOptions.SectionName));
+            services.AddOptions<CacheOptions>().Bind(configuration.GetSection(CacheOptions.SectionName)); 
             return configuration;
         }
 

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using PAR.ParseLib;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,8 +19,9 @@ namespace PAR.PartsGrabber
         private readonly ApiServiceOptions _apiServiceOptions;
         private readonly IApiService _apiService;
         private readonly ILogger _logger;
-        private readonly ParseService _parseService;
+        private readonly IParseService _parseService;
         private readonly ITelegramNotificationService _telegramService;
+        private readonly ModuleMetrics _moduleMetrics;
 
         public ProcessService(
             ProcessParsingResultService processParsingResultService,
@@ -27,8 +29,9 @@ namespace PAR.PartsGrabber
             IOptions<ApiServiceOptions> apiServiceOptions,
             IApiService apiService,
             ILogger logger,
-            ParseService parseService,
-            ITelegramNotificationService telegramService)
+            IParseService parseService,
+            ITelegramNotificationService telegramService,
+            ModuleMetrics moduleMetrics)
         {
             _processParsingResultService = processParsingResultService;
             _options = options.Value;
@@ -37,6 +40,7 @@ namespace PAR.PartsGrabber
             _logger = logger;
             _parseService = parseService;
             _telegramService = telegramService;
+            _moduleMetrics = moduleMetrics;
         }
 
         /// <summary>
@@ -44,18 +48,25 @@ namespace PAR.PartsGrabber
         /// </summary>
         public async Task<DateTime> Process(DateTime nextRunUtc, List<CheckProxyResult> sourceProxies)
         {
+            _moduleMetrics.UpdateActiveProxiesCount(sourceProxies.Count);
+
             if (DateTime.UtcNow <= nextRunUtc)
                 return nextRunUtc;
+            var stopwatch = Stopwatch.StartNew(); // ← для метрик
 
             var partsFromAPI = await _apiService.Get<PartsAndReplace>(_apiServiceOptions.BaseUrl + _apiServiceOptions.GetPartsWithStateUrl);
+            int successCount = 0, errorCount = 0; //  Счетчики
 
             foreach (var part in partsFromAPI)
             {
                 if (string.IsNullOrEmpty(part.MainPartNumber))
                 {
+                    _moduleMetrics.ReportError("empty_partnumber"); // 
+
                     _logger.LogInformation("The part with id: {Id} is missing a part number.", part.Id);
                     continue;
                 }
+                var partStopwatch = Stopwatch.StartNew();
 
                 _logger.LogInformation("START PROCESSING WITH: {Part}", part.MainPartNumber);
                 var processStartTime = DateTime.UtcNow;
@@ -90,7 +101,7 @@ namespace PAR.PartsGrabber
                                 result.WithErrorToSave = true;  // empty → error (Status=false)
                             }
                             // Иначе: WithErrorToSave=false → success (Status=true), partial данные сохранятся
-                        }
+                        }                        
                     }
 
                     var tasks = new List<Task>();
@@ -133,14 +144,31 @@ namespace PAR.PartsGrabber
                     {
                         throw;  // другие отмены пробрасываем
                     }
+                    successCount++; // 
+                    _moduleMetrics.ReportPartProcessed(true);
                 }
-                catch (Exception ex)
+                catch (Exception ex) //  В catch
                 {
+                    errorCount++;
+                    _moduleMetrics.ReportPartProcessed(false);
+                    _moduleMetrics.ReportError("parse_error");
                     _logger.LogError(ex, "ERROR PROCESSING {Part}", part.MainPartNumber);
+                }
+                finally
+                {
+                    partStopwatch.Stop();
+                    _moduleMetrics.ReportProcessingDuration(partStopwatch.Elapsed.TotalSeconds); // 
                 }
 
                 _logger.LogInformation("END PROCESSING WITH: {Part}", part.MainPartNumber);
             }
+
+            stopwatch.Stop();
+            _moduleMetrics.ReportProcessingDuration(stopwatch.Elapsed.TotalSeconds);
+            _logger.LogInformation("Cycle: {Success}/{Total} parts, {Duration}s",
+                successCount, partsFromAPI.Count, stopwatch.Elapsed.TotalSeconds);
+
+            _moduleMetrics.UpdateUptime(); //  Uptime
 
             return DateTime.UtcNow.AddSeconds(Convert.ToDouble(_options.Interval));
         }

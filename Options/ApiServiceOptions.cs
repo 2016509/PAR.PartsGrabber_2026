@@ -1,4 +1,6 @@
-﻿namespace PAR.PartsGrabber
+﻿using PAR.PartsGrabber.Options;
+
+namespace PAR.PartsGrabber
 {
     public class ApiServiceOptions
     {
@@ -27,5 +29,9 @@
         public string UpdatePartSourceUrl { get; set; } = null!;
 
         public string SaveErrorUrl { get; set;} = null!;
+
+        public string GetCachedPartData { get; set; } = null!;
+
+        public string SaveCachedPartData { get; set; } = null!;
     }
 }

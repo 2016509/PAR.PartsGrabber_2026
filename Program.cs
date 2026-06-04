@@ -31,63 +31,18 @@ namespace PAR.PartsGrabber
             var moduleMetrics = serviceProvider.GetRequiredService<ModuleMetrics>();
             moduleMetrics.StartHealthCheck();
 
-            var apiService = serviceProvider.GetRequiredService<IApiService>();
             var processService = serviceProvider.GetRequiredService<ProcessService>();
             var logger = serviceProvider.GetRequiredService<ILogger>();
-            var siteProxyChecker = serviceProvider.GetRequiredService<SiteProxyCheckerService>();
 
             // Start Chromium once
             var pw = serviceProvider.GetRequiredService<PlaywrightFetcher>();
             await pw.EnsureStartedAsync();
 
-            var apiServiceOptions = serviceProvider.GetRequiredService<IOptions<ApiServiceOptions>>();
             var moduleOptions = serviceProvider.GetRequiredService<IOptions<ModuleOptions>>();
-
-            var activeSourceProxies = new List<CheckProxyResult>();
 
             ServicePointManager.ServerCertificateValidationCallback = delegate { return true; };
             ServicePointManager.Expect100Continue = false;
             ServicePointManager.DefaultConnectionLimit = 100;
-
-
-            try
-            {
-                var proxies = await apiService.Get<Proxy>(apiServiceOptions.Value.BaseUrl + apiServiceOptions.Value.GetProxiesUrl);
-                var activeProxies = proxies.Where(x => x.IsActive).ToList();
-
-                var partsSources = await apiService.Get<PartSource>(apiServiceOptions.Value.BaseUrl + apiServiceOptions.Value.GetPartsSourcesUrl);
-                var activePartsSources = partsSources.Where(x => x.Status).ToList();
-
-                var sourceProxies = await siteProxyChecker.CheckProxies(activeProxies, activePartsSources);
-
-                foreach (var sourceProxy in sourceProxies)
-                {
-                    if (sourceProxy.Proxies.Count == 0)
-                    {
-                        sourceProxy.PartSource.Status = false;
-
-                        var putUrl = apiServiceOptions.Value.BaseUrl + apiServiceOptions.Value.UpdatePartSourceUrl + $"/{sourceProxy.PartSource.Id}";
-                        await apiService.Put(putUrl, sourceProxy.PartSource);
-
-                        await apiService.Post(
-                            apiServiceOptions.Value.BaseUrl + apiServiceOptions.Value.SaveErrorUrl,
-                            new ErrorLog
-                            {
-                                error_message = $"Couldn't select a suitable proxy for the site {sourceProxy.PartSource.SourceName}",
-                                script_name = "ParsGrabber"
-                            });
-                    }
-                    else
-                    {
-                        activeSourceProxies.Add(sourceProxy);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Unexpected exception in Main");
-                Environment.Exit(1);
-            }
 
             logger.LogInformation("Press ESC to stop");
 
@@ -97,7 +52,7 @@ namespace PAR.PartsGrabber
             {
                 try
                 {
-                    nextRunUtc = await processService.Process(nextRunUtc, activeSourceProxies);
+                    nextRunUtc = await processService.Process(nextRunUtc);
                 }
                 catch (EntityNotFoundException)
                 {
@@ -105,9 +60,13 @@ namespace PAR.PartsGrabber
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Fatal error in main loop");
-                    moduleMetrics.ReportFatalError(); 
-                    Environment.Exit(1);
+                    moduleMetrics.ReportApiUnavailable();
+                    moduleMetrics.ReportError("main_loop_error");
+                    logger.LogError(
+                        ex,
+                        "Error in main loop. Module stays alive and will retry after {RetryInSeconds} seconds",
+                        moduleOptions.Value.ApiRetryIntervalSeconds);
+                    nextRunUtc = DateTime.UtcNow.AddSeconds(moduleOptions.Value.ApiRetryIntervalSeconds);
                 }
                 await Task.Delay(200);
             }
@@ -135,12 +94,14 @@ namespace PAR.PartsGrabber
         private static void ConfigureServices(ServiceCollection services)
         {
             services.AddSingleton<DatabasePartsService>();  
+            services.AddSingleton<InternalReplacementLookupService>();
 
             services.AddTransient<IApiService, ApiService>();
             services.AddSingleton<ModuleMetrics>();
             services.AddSingleton<PlaywrightFetcher>();
             services.AddSingleton<SiteProxyCheckerService>();
             services.AddSingleton<ProxiedHttpClientPool>();
+            services.AddSingleton<SourceProxyProvider>();
 
             services.AddTransient<IParsersFactory, ParsersFactory>();
             services.AddTransient<ProcessParsingResultService>();
@@ -151,7 +112,8 @@ namespace PAR.PartsGrabber
              new CachedParseServiceDecorator(
                  sp.GetRequiredService<ParseService>(),
                  sp.GetRequiredService<DatabasePartsService>(),
-                 sp.GetRequiredService<ILogger<CachedParseServiceDecorator>>(),
+                 sp.GetRequiredService<InternalReplacementLookupService>(),
+                 sp.GetRequiredService<ILogger>(),
                  sp.GetRequiredService<ModuleMetrics>(),
                  sp.GetRequiredService<IOptions<CacheOptions>>()  // ← Добавить эту строку
              ));
@@ -188,7 +150,8 @@ namespace PAR.PartsGrabber
             services.AddOptions<SitesToCheckProxyOptions>().Bind(configuration);
             services.AddOptions<ModuleOptions>().Bind(configuration.GetSection(ModuleOptions.SectionName));
             services.AddOptions<TelegramOptions>().Bind(configuration.GetSection(TelegramOptions.SectionName));
-            services.AddOptions<CacheOptions>().Bind(configuration.GetSection(CacheOptions.SectionName)); 
+            services.AddOptions<CacheOptions>().Bind(configuration.GetSection(CacheOptions.SectionName));
+            services.AddOptions<InternalReplacementLookupOptions>().Bind(configuration.GetSection(InternalReplacementLookupOptions.SectionName));
             return configuration;
         }
 

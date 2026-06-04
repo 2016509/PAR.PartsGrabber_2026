@@ -22,6 +22,7 @@ namespace PAR.PartsGrabber
         private readonly IParseService _parseService;
         private readonly ITelegramNotificationService _telegramService;
         private readonly ModuleMetrics _moduleMetrics;
+        private readonly SourceProxyProvider _sourceProxyProvider;
 
         public ProcessService(
             ProcessParsingResultService processParsingResultService,
@@ -31,7 +32,8 @@ namespace PAR.PartsGrabber
             ILogger logger,
             IParseService parseService,
             ITelegramNotificationService telegramService,
-            ModuleMetrics moduleMetrics)
+            ModuleMetrics moduleMetrics,
+            SourceProxyProvider sourceProxyProvider)
         {
             _processParsingResultService = processParsingResultService;
             _options = options.Value;
@@ -41,20 +43,31 @@ namespace PAR.PartsGrabber
             _parseService = parseService;
             _telegramService = telegramService;
             _moduleMetrics = moduleMetrics;
+            _sourceProxyProvider = sourceProxyProvider;
         }
 
         /// <summary>
         /// Returns next scheduled run time (UTC).
         /// </summary>
-        public async Task<DateTime> Process(DateTime nextRunUtc, List<CheckProxyResult> sourceProxies)
+        public async Task<DateTime> Process(DateTime nextRunUtc)
         {
-            _moduleMetrics.UpdateActiveProxiesCount(sourceProxies.Count);
-
             if (DateTime.UtcNow <= nextRunUtc)
                 return nextRunUtc;
             var stopwatch = Stopwatch.StartNew(); // ← для метрик
 
+            var sourceProxies = await _sourceProxyProvider.GetActiveSourceProxiesAsync();
+            if (sourceProxies.Count == 0)
+            {
+                _logger.LogWarning(
+                    "No active source/proxy bindings loaded. RetryInSeconds={RetryInSeconds}",
+                    _options.ApiRetryIntervalSeconds);
+
+                _moduleMetrics.ReportError("no_active_source_proxy_bindings");
+                return DateTime.UtcNow.AddSeconds(_options.ApiRetryIntervalSeconds);
+            }
+
             var partsFromAPI = await _apiService.Get<PartsAndReplace>(_apiServiceOptions.BaseUrl + _apiServiceOptions.GetPartsWithStateUrl);
+            _moduleMetrics.ReportApiAvailable();
             int successCount = 0, errorCount = 0; //  Счетчики
 
             foreach (var part in partsFromAPI)
@@ -110,15 +123,11 @@ namespace PAR.PartsGrabber
                     {
                         if (parsingResult.WithErrorToSave)
                         {
-                            parsingResult.PartSource.Status = false;
-                            var url = $"{_apiServiceOptions.BaseUrl}{_apiServiceOptions.UpdatePartSourceUrl}/{parsingResult.PartSource.Id}";
-                            tasks.Add(_apiService.Put(url, parsingResult.PartSource));
-
                             tasks.Add(_apiService.Post(
                                 _apiServiceOptions.BaseUrl + _apiServiceOptions.SaveErrorUrl,
                                 new ErrorLog
                                 {
-                                    error_message = $"Site {parsingResult.PartSource.SourceName} not responding{(isTimeout ? " (timeout)" : "")}",
+                                    error_message = $"Parsing failed for site {parsingResult.PartSource.SourceName}{(isTimeout ? " (timeout)" : "")}. Source status is managed by PartsSourceHealthChecker.",
                                     script_name = "ParsGrabber"
                                 }));
                         }

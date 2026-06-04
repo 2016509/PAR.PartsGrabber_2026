@@ -10,6 +10,7 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using System.Security.Authentication;
+using System.Text.RegularExpressions;
 
 namespace PAR.PartsGrabber
 {
@@ -60,8 +61,11 @@ namespace PAR.PartsGrabber
             if (parsingPartsWithReplaces.Count() > 0)
             {
                 replaces = parsingPartsWithReplaces.SelectMany(x => x.Replaces)
-                    .Distinct()
-                    .Where(x => x != part.MainPartNumber)
+                    .Select(NormalizeReplacementNumber)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Where(x => !PartNumbersEqual(x, part.MainPartNumber))
+                    .Select(x => x!)
                     .ToList();
             }
 
@@ -146,7 +150,11 @@ namespace PAR.PartsGrabber
 
             if (parsingPart.Replaces.Count > 0)
             {
-                foreach (var replace in parsingPart.Replaces)
+                foreach (var replace in parsingPart.Replaces
+                    .Select(NormalizeReplacementNumber)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(x => x!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase))
                 {
                     ct.ThrowIfCancellationRequested();
                     await _apiService.Post(
@@ -349,9 +357,9 @@ namespace PAR.PartsGrabber
                     using var ms = new MemoryStream(bytes);
                     image = Image.Load(ms);
                 }
-                catch (SixLabors.ImageSharp.UnknownImageFormatException ex)
+                catch (SixLabors.ImageSharp.UnknownImageFormatException)
                 {
-                    _logger.LogDebug(ex,
+                    _logger.LogDebug(
                         "ImageSharp could not detect format for {Url}. Trying HEIF/AVIF decoder.", url);
 
                     // 2. Fallback: пробуем HEIF/AVIF через HeifDecoder (LibHeif.Native)
@@ -414,6 +422,46 @@ namespace PAR.PartsGrabber
             }
 
             return dir.FullName + nextFileNameInt.ToString();
+        }
+
+        private static string? NormalizeReplacementNumber(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+
+            var cleaned = value
+                .Replace('\u00A0', ' ')
+                .Replace('\uFFFD', ' ')
+                .Trim()
+                .ToUpperInvariant();
+
+            if (cleaned.Length > 80)
+                return null;
+
+            var match = Regex.Match(cleaned, @"[A-Z0-9][A-Z0-9.\-]{2,39}");
+            if (!match.Success)
+                return null;
+
+            var candidate = match.Value.Trim('.', '-');
+            if (candidate.Length < 3 || candidate.Length > 40)
+                return null;
+
+            if (!candidate.Any(char.IsDigit))
+                return null;
+
+            return candidate.StartsWith("WPW", StringComparison.Ordinal)
+                ? candidate[2..]
+                : candidate;
+        }
+
+        private static bool PartNumbersEqual(string? left, string? right)
+        {
+            var leftNorm = NormalizeReplacementNumber(left);
+            var rightNorm = NormalizeReplacementNumber(right);
+
+            return !string.IsNullOrWhiteSpace(leftNorm)
+                && !string.IsNullOrWhiteSpace(rightNorm)
+                && leftNorm.Equals(rightNorm, StringComparison.OrdinalIgnoreCase);
         }
 
     }

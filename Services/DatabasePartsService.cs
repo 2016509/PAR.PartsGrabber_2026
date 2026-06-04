@@ -8,20 +8,21 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using ILogger = Microsoft.Extensions.Logging.ILogger;
 
 namespace PAR.PartsGrabber
 {
     public class DatabasePartsService
     {
         private readonly IApiService _apiService;
-        private readonly ILogger<DatabasePartsService> _logger;
+        private readonly ILogger _logger;
         private readonly ModuleMetrics _metrics;
         private readonly ApiServiceOptions _options;
 
         public DatabasePartsService(
             IApiService apiService,
             IOptions<ApiServiceOptions> options,
-            ILogger<DatabasePartsService> logger,
+            ILogger logger,
             ModuleMetrics metrics)
         {
             _apiService = apiService;
@@ -41,8 +42,8 @@ namespace PAR.PartsGrabber
             try
             {
                 // Запрашиваем данные из Web API
-                var url = $"{_options.BaseUrl}{_options.GetCachedPartData}?partNumber={partNumber}&sourceSite={targetSource.SourceName}";
-                var dbData = await _apiService.Get<CachedPartData>(url, ct);
+                var url = $"{_options.BaseUrl}{_options.GetCachedPartData}?partNumber={Uri.EscapeDataString(partNumber)}&sourceSite={Uri.EscapeDataString(targetSource.SourceName)}";
+                var dbData = await _apiService.GetSingle<CachedPartData>(url, ct);
 
                 if (dbData == null)
                 {
@@ -50,23 +51,22 @@ namespace PAR.PartsGrabber
                         partNumber, targetSource.SourceName);
                     return null;
                 }
-                var replace  = dbData.FirstOrDefault();
                 
                    
                 // Создаем ParsingPart ИЗ БД (как если бы мы спарсили)
                 var parsingPart = new ParsingPart
                 {
                     PartSource = targetSource,
-                    Name = replace.Name,
-                    Replaces = replace.Replaces ?? new List<string>(),
-                    ParsingPictures = replace.Pictures?.Select(p => new ParsingPicture
+                    Name = dbData.Name,
+                    Replaces = dbData.Replaces ?? new List<string>(),
+                    ParsingPictures = dbData.Pictures?.Select(p => new ParsingPicture
                     {
                         Url = p.Url,
                         LocalPath = p.LocalPath
                     }).ToList() ?? new List<ParsingPicture>(),
-                    SitePartNumber = replace.SitePartNumber,
-                    RegularPrice = replace.RegularPrice,
-                    AttempsCount = replace.AttempsCount,
+                    SitePartNumber = dbData.SitePartNumber,
+                    RegularPrice = dbData.RegularPrice,
+                    AttempsCount = dbData.AttempsCount,
                     WithErrorToSave = false,
                     UsedProxy = null,
                     UsedPlaywright = false
@@ -77,6 +77,14 @@ namespace PAR.PartsGrabber
                     return parsingPart;
                 
                
+            }
+            catch (EntityNotFoundException)
+            {
+                _logger.LogDebug(
+                    "No data in grabber_parts for {PartNumber} from {Source}",
+                    partNumber,
+                    targetSource.SourceName);
+                return null;
             }
             catch (Exception ex)
             {

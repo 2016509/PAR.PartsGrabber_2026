@@ -10,8 +10,8 @@
 - Забирает из API список прокси и список источников (`PartSource`), фильтрует активные, прогоняет чекер прокси по каждому сайту.
 
 2. Проверка прокси/источников:
-- Для каждого сайта проверяет прокси; при Cloudflare/SSL проблемах может переключаться на Playwright.
-- Если для сайта не найдено ни одного подходящего прокси, модуль отключает источник (`PartSource.Status = false`) и сохраняет ошибку в API (`ErrorLog`).
+- В режиме `Module.UseExternalSourceHealthChecker=true` каждый цикл перечитывает активные сайты и прокси из API и доверяет статусам, которые поддерживает отдельный `PartsSourceHealthChecker`.
+- PartsGrabber больше не отключает источники (`PartSource.Status = false`) по ошибкам парсинга; он сохраняет `ErrorLog`, а доступность сайтов/прокси решает внешний чекер.
 
 3. Основной цикл:
 - По таймеру (`Module.Interval` секунд) забирает из API список деталей на обработку (`PartsAndReplace`).
@@ -24,6 +24,8 @@
 ### Конфиг 
 - `ApiService` (BaseUrl и набор URL’ов эндпойнтов).
 - `Module.Interval` — интервал между проходами.
+- `Module.UseExternalSourceHealthChecker` — когда `true`, PartsGrabber не запускает собственную стартовую проверку сайтов/прокси и использует текущие `parts_sources.status` / `proxy_table.IsActive`.
+- `Module.ApiRetryIntervalSeconds` — задержка перед повторной попыткой, если API/БД временно недоступны.
 - `SitesToParse`, `SitesToCheckProxy` (опционально, под выборку/проверку сайтов).
 
 ### Данные из API

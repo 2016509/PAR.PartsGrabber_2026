@@ -35,7 +35,7 @@ namespace PAR.PartsGrabber.Options
             // Если есть белый список - только из него
             if (EnabledSources.Any())
             {
-                return EnabledSources.Contains(sourceName);
+                return EnabledSources.Any(x => SourceMatches(x, sourceName));
             }
 
             // Если нет белого списка, но есть черный - исключаем черный
@@ -46,6 +46,31 @@ namespace PAR.PartsGrabber.Options
 
             // Иначе кэшируем всё
             return true;
+        }
+
+        private static bool SourceMatches(string configuredSource, string sourceName)
+        {
+            var configured = NormalizeSource(configuredSource);
+            var source = NormalizeSource(sourceName);
+
+            return configured.Equals(source, StringComparison.OrdinalIgnoreCase)
+                || configured.Contains(source, StringComparison.OrdinalIgnoreCase)
+                || source.Contains(configured, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeSource(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            var normalized = value.Trim();
+            if (Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+                normalized = uri.Host;
+
+            if (normalized.StartsWith("www.", StringComparison.OrdinalIgnoreCase))
+                normalized = normalized[4..];
+
+            return normalized.TrimEnd('/').ToLowerInvariant();
         }
     }
 }

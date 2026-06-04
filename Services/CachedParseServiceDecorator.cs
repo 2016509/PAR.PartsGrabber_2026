@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using ILogger = Microsoft.Extensions.Logging.ILogger;
 
 namespace PAR.ParseLib
 {
@@ -15,19 +16,22 @@ namespace PAR.ParseLib
     {
         private readonly IParseService _inner;
         private readonly DatabasePartsService _databaseService;
-        private readonly ILogger<CachedParseServiceDecorator> _logger;
+        private readonly InternalReplacementLookupService _internalReplacementLookupService;
+        private readonly ILogger _logger;
         private readonly ModuleMetrics _metrics;
         private readonly CacheOptions _options;
 
         public CachedParseServiceDecorator(
             IParseService inner,
             DatabasePartsService databaseService,
-            ILogger<CachedParseServiceDecorator> logger,
+            InternalReplacementLookupService internalReplacementLookupService,
+            ILogger logger,
             ModuleMetrics metrics,
             IOptions<CacheOptions> options)
         {
             _inner = inner;
             _databaseService = databaseService;
+            _internalReplacementLookupService = internalReplacementLookupService;
             _logger = logger;
             _metrics = metrics;
             _options = options.Value;
@@ -40,13 +44,46 @@ namespace PAR.ParseLib
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var results = new List<ParsingPart>();
-            var sourcesToParseFromWeb = new List<(CheckProxyResult SourceProxy, PartSource PartSource, int Index)>();
+            var internalLookup = await _internalReplacementLookupService.LookupAsync(
+                partNumber,
+                sourceProxies,
+                cancellationToken);
 
-            for (int i = 0; i < sourceProxies.Count; i++)
+            var results = new List<ParsingPart>(internalLookup.ParsingParts);
+            var sourcesToParseFromWeb = new List<(CheckProxyResult SourceProxy, PartSource PartSource, int Index)>();
+            var sourceProxiesForRegularParsing = internalLookup.Found
+                ? sourceProxies
+                    .Where(x => !_internalReplacementLookupService.IsInternalReplacementSource(x.PartSource.SourceName))
+                    .ToList()
+                : sourceProxies;
+
+            if (internalLookup.Found)
             {
-                var sourceProxy = sourceProxies[i];
-                var useDatabase = _options.ShouldCacheSource(sourceProxy.PartSource.SourceName);
+                _metrics.ReportOnlineReplacementFallback(false);
+
+                _logger.LogInformation(
+                    "Internal replacements found for {PartNumber}. ReplacesCount={ReplacesCount}. Sources={Sources}. OnlineReplacementFallback=False",
+                    partNumber,
+                    internalLookup.Replaces.Count,
+                    string.Join(", ", internalLookup.Sources));
+            }
+            else
+            {
+                _metrics.ReportOnlineReplacementFallback(true);
+
+                _logger.LogInformation(
+                    "Internal replacements not found for {PartNumber}. OnlineReplacementFallback=True",
+                    partNumber);
+            }
+
+            for (int i = 0; i < sourceProxiesForRegularParsing.Count; i++)
+            {
+                var sourceProxy = sourceProxiesForRegularParsing[i];
+                var isInternalReplacementSource = _internalReplacementLookupService
+                    .IsInternalReplacementSource(sourceProxy.PartSource.SourceName);
+                var canParseFromWeb = sourceProxy.PartSource.Status && sourceProxy.Proxies.Count > 0;
+                var useDatabase = _options.ShouldCacheSource(sourceProxy.PartSource.SourceName)
+                    && !(internalLookup.FallbackRequired && isInternalReplacementSource);
 
                 if (useDatabase)
                 {
@@ -66,19 +103,50 @@ namespace PAR.ParseLib
                     }
                     else
                     {
+                        if (!canParseFromWeb)
+                        {
+                            _logger.LogInformation(
+                                "No data in grabber_parts for {PartNumber} from {Source}, but web parsing is skipped because source is inactive or has no active proxies. SourceStatus={SourceStatus}, ProxyCount={ProxyCount}",
+                                partNumber,
+                                sourceProxy.PartSource.SourceName,
+                                sourceProxy.PartSource.Status,
+                                sourceProxy.Proxies.Count);
+                            _metrics.ReportCacheMiss(sourceProxy.PartSource.SourceName);
+                            continue;
+                        }
+
                         // Нет данных в БД - нужно спарсить из веба
                         _logger.LogInformation("No data in grabber_parts for {PartNumber} from {Source}, will parse from web",
                             partNumber, sourceProxy.PartSource.SourceName);
-                        sourcesToParseFromWeb.Add((sourceProxy, sourceProxy.PartSource, i));
                         results.Add(null!);
+                        sourcesToParseFromWeb.Add((sourceProxy, sourceProxy.PartSource, results.Count - 1));
                         _metrics.ReportCacheMiss(sourceProxy.PartSource.SourceName);
                     }
                 }
                 else
                 {
+                    if (!canParseFromWeb)
+                    {
+                        _logger.LogInformation(
+                            "Web parsing skipped for {PartNumber} from {Source}. SourceStatus={SourceStatus}, ProxyCount={ProxyCount}",
+                            partNumber,
+                            sourceProxy.PartSource.SourceName,
+                            sourceProxy.PartSource.Status,
+                            sourceProxy.Proxies.Count);
+                        continue;
+                    }
+
+                    if (isInternalReplacementSource && internalLookup.FallbackRequired)
+                    {
+                        _logger.LogInformation(
+                            "Internal replacements fallback enabled for {PartNumber} from {Source}, will parse from web",
+                            partNumber,
+                            sourceProxy.PartSource.SourceName);
+                    }
+
                     // Не в белом списке - всегда парсим из веба
-                    sourcesToParseFromWeb.Add((sourceProxy, sourceProxy.PartSource, i));
                     results.Add(null!);
+                    sourcesToParseFromWeb.Add((sourceProxy, sourceProxy.PartSource, results.Count - 1));
                 }
             }
 

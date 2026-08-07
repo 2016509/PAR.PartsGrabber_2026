@@ -1,0 +1,17 @@
+**
+
+!PAR.PartsGrabber_2026/**
+!2_KameraData/**
+!PAR.ParseLib-main/**
+
+**/.git
+**/.vs
+**/.cr
+**/bin
+**/obj
+**/*.user
+**/*.suo
+**/*.zip
+**/*.log
+**/Logs
+**/logs

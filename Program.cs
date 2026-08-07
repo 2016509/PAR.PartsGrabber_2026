@@ -18,6 +18,13 @@ namespace PAR.PartsGrabber
     {
         static async Task Main(string[] args)
         {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                cts.Cancel();
+            };
+
             
             var services = Initialize();
             await using var serviceProvider = services.BuildServiceProvider();
@@ -44,11 +51,11 @@ namespace PAR.PartsGrabber
             ServicePointManager.Expect100Continue = false;
             ServicePointManager.DefaultConnectionLimit = 100;
 
-            logger.LogInformation("Press ESC to stop");
+            logger.LogInformation("Press ESC, Ctrl+C, or send SIGTERM to stop");
 
             var nextRunUtc = DateTime.UtcNow.AddSeconds(Convert.ToDouble(moduleOptions.Value.Interval));
 
-            while (!(Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Escape))
+            while (!IsStopRequested(cts.Token))
             {
                 try
                 {
@@ -70,6 +77,17 @@ namespace PAR.PartsGrabber
                 }
                 await Task.Delay(200);
             }
+        }
+
+        private static bool IsStopRequested(CancellationToken cancellationToken)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                return true;
+
+            if (Console.IsInputRedirected)
+                return false;
+
+            return Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Escape;
         }
 
         private static ServiceCollection Initialize()

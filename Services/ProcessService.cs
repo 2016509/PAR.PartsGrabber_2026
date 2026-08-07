@@ -84,14 +84,19 @@ namespace PAR.PartsGrabber
                 _logger.LogInformation("START PROCESSING WITH: {Part}", part.MainPartNumber);
                 var processStartTime = DateTime.UtcNow;
 
+                var parsingResults = new List<ParsingPart>();
+                var wasProcessed = false;
+
                 try
                 {
                     // Жёсткий таймаут 1 минута
-                    using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(1));
-                    var parsingResults = await _parseService.Parse(part.MainPartNumber, sourceProxies, cts.Token);
+                    using var parseCts = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+                    using var saveCts = new CancellationTokenSource(TimeSpan.FromSeconds(_options.ApiRetryIntervalSeconds));
+
+                    parsingResults = await _parseService.Parse(part.MainPartNumber, sourceProxies, parseCts.Token);
 
                     // Проверяем таймаут ПОСЛЕ await (partial данные готовы)
-                    bool isTimeout = cts.Token.IsCancellationRequested;
+                    bool isTimeout = parseCts.Token.IsCancellationRequested;
                     if (isTimeout)
                     {
                         _logger.LogWarning("Timeout after 1 min for part {Part}. Saving partial results.", part.MainPartNumber);
@@ -114,7 +119,7 @@ namespace PAR.PartsGrabber
                                 result.WithErrorToSave = true;  // empty → error (Status=false)
                             }
                             // Иначе: WithErrorToSave=false → success (Status=true), partial данные сохранятся
-                        }                        
+                        }
                     }
 
                     var tasks = new List<Task>();
@@ -133,28 +138,32 @@ namespace PAR.PartsGrabber
                         }
                         else
                         {
-                            tasks.Add(_processParsingResultService.Save(parsingResult, part, cts.Token));
+                            tasks.Add(_processParsingResultService.Save(parsingResult, part, saveCts.Token));
                         }
                     }
 
                     await Task.WhenAll(tasks);
 
                     var partSources = sourceProxies.Select(x => x.PartSource).ToList();
-                    await _processParsingResultService.UpdatePartsAndReplace(parsingResults, part, partSources, cts.Token);
+                    await _processParsingResultService.UpdatePartsAndReplace(parsingResults, part, partSources, saveCts.Token);
+
+                    wasProcessed = true;
                 }
                 catch (OperationCanceledException ex)
                 {
                     if (ex.CancellationToken.IsCancellationRequested)
                     {
                         _logger.LogWarning("Parse cancelled by timeout for {Part}", part.MainPartNumber);
-                        // Partial данные уже обработаны в if(isTimeout) или exception в парсерах
+                        using var saveCts = new CancellationTokenSource(TimeSpan.FromSeconds(_options.ApiRetryIntervalSeconds));
+                        var partSources = sourceProxies.Select(x => x.PartSource).ToList();
+
+                        await _processParsingResultService.UpdatePartsAndReplace(parsingResults, part, partSources, saveCts.Token);
+                        wasProcessed = true;
                     }
                     else
                     {
                         throw;  // другие отмены пробрасываем
                     }
-                    successCount++; // 
-                    _moduleMetrics.ReportPartProcessed(true);
                 }
                 catch (Exception ex) //  В catch
                 {
@@ -167,6 +176,11 @@ namespace PAR.PartsGrabber
                 {
                     partStopwatch.Stop();
                     _moduleMetrics.ReportProcessingDuration(partStopwatch.Elapsed.TotalSeconds); // 
+                }
+                if (wasProcessed)
+                {
+                    successCount++;
+                    _moduleMetrics.ReportPartProcessed(true);
                 }
 
                 _logger.LogInformation("END PROCESSING WITH: {Part}", part.MainPartNumber);

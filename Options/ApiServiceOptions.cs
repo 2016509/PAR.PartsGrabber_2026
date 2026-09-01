@@ -12,6 +12,8 @@ namespace PAR.PartsGrabber
 
         public string GetPartsWithStateUrl { get; set; } = null!;
 
+        public string ClaimPartsAndReplacesUrl { get; set; } = "/PartsAndReplaces/claim";
+
         public string GetPartsSourcesUrl { get; set; } = null!;
 
         public string AddPartsNamesArchiveUrl { get; set; } = null!;
@@ -23,6 +25,8 @@ namespace PAR.PartsGrabber
         public string UpdatePartsAndReplacesStatusUrl { get; set; } = null!;
 
         public string UpdatePartsAndReplacesUrl { get; set; } = null!;
+
+        public string MarkPartsAndReplacesFailedUrl { get; set; } = "/PartsAndReplaces/mark-failed";
 
         public string UpdateProxyStatusUrl { get; set; } = null!;
 

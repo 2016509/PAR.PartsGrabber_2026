@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PAR.ParseLib;
+using PAR.PartsGrabber.Options;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -66,7 +67,14 @@ namespace PAR.PartsGrabber
                 return DateTime.UtcNow.AddSeconds(_options.ApiRetryIntervalSeconds);
             }
 
-            var partsFromAPI = await _apiService.Get<PartsAndReplace>(_apiServiceOptions.BaseUrl + _apiServiceOptions.GetPartsWithStateUrl);
+            var partsFromAPI = await _apiService.PostForList<ClaimPartsAndReplacesRequest, PartsAndReplace>(
+                _apiServiceOptions.BaseUrl + _apiServiceOptions.ClaimPartsAndReplacesUrl,
+                new ClaimPartsAndReplacesRequest
+                {
+                    WorkerId = _options.WorkerId,
+                    BatchSize = _options.ClaimBatchSize,
+                    LeaseSeconds = _options.LeaseSeconds
+                });
             _moduleMetrics.ReportApiAvailable();
             int successCount = 0, errorCount = 0; //  Счетчики
 
@@ -171,6 +179,8 @@ namespace PAR.PartsGrabber
                     _moduleMetrics.ReportPartProcessed(false);
                     _moduleMetrics.ReportError("parse_error");
                     _logger.LogError(ex, "ERROR PROCESSING {Part}", part.MainPartNumber);
+
+                    await MarkPartFailedForRetryAsync(part, ex);
                 }
                 finally
                 {
@@ -194,6 +204,29 @@ namespace PAR.PartsGrabber
             _moduleMetrics.UpdateUptime(); //  Uptime
 
             return DateTime.UtcNow.AddSeconds(Convert.ToDouble(_options.Interval));
+        }
+
+        private async Task MarkPartFailedForRetryAsync(PartsAndReplace part, Exception exception)
+        {
+            try
+            {
+                await _apiService.Post(
+                    $"{_apiServiceOptions.BaseUrl}{_apiServiceOptions.MarkPartsAndReplacesFailedUrl}/{part.Id}",
+                    new MarkPartsAndReplacesFailedRequest
+                    {
+                        WorkerId = _options.WorkerId,
+                        Error = exception.Message,
+                        RetryDelaySeconds = _options.RetryDelaySeconds,
+                        MaxAttempts = _options.MaxAttempts
+                    });
+            }
+            catch (Exception markFailedException)
+            {
+                _logger.LogWarning(
+                    markFailedException,
+                    "Failed to mark part {PartId} for retry after processing error",
+                    part.Id);
+            }
         }
     }
 }

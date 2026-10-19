@@ -32,12 +32,12 @@ namespace PAR.PartsGrabber
 
         public virtual async Task<List<CheckProxyResult>> GetActiveSourceProxiesAsync(CancellationToken cancellationToken = default)
         {
-            var proxies = await _apiService.Get<Proxy>(_apiServiceOptions.BaseUrl + _apiServiceOptions.GetProxiesUrl);
+            var proxies = await _apiService.Get<Proxy>(_apiServiceOptions.ProxyRoot + _apiServiceOptions.GetProxiesUrl, cancellationToken);
             var activeProxies = proxies
                 .Where(x => x.IsActive && !string.IsNullOrWhiteSpace(x.IP) && x.Port is > 0)
                 .ToList();
 
-            var partSources = await _apiService.Get<PartSource>(_apiServiceOptions.BaseUrl + _apiServiceOptions.GetPartsSourcesUrl);
+            var partSources = await _apiService.Get<PartSource>(_apiServiceOptions.SourcesRoot + _apiServiceOptions.GetPartsSourcesUrl, cancellationToken);
             var activePartSources = partSources
                 .Where(x => x.Status)
                 .ToList();

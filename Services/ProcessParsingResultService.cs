@@ -1,4 +1,4 @@
-﻿using HeyRed.ImageSharp.Heif;
+using HeyRed.ImageSharp.Heif;
 using HeyRed.ImageSharp.Heif.Formats.Avif;
 using HeyRed.ImageSharp.Heif.Formats.Heif;
 using KameraData.Data.Models;
@@ -79,7 +79,7 @@ namespace PAR.PartsGrabber
                 _logger.LogInformation($"No names/replaces. Update {part.MainPartNumber} → Status=3");
 
                 await _apiService.Put(
-                    _apiServiceOptions.BaseUrl + _apiServiceOptions.UpdatePartsAndReplacesUrl,
+                    _apiServiceOptions.PartsRoot + _apiServiceOptions.UpdatePartsAndReplacesUrl,
                     part,
                     ct); // ✅ #3 ct в API
                 return;
@@ -124,7 +124,7 @@ namespace PAR.PartsGrabber
             ct.ThrowIfCancellationRequested(); // ✅ #6 Финал
 
             await _apiService.Put(
-                _apiServiceOptions.BaseUrl + _apiServiceOptions.UpdatePartsAndReplacesUrl,
+                _apiServiceOptions.PartsRoot + _apiServiceOptions.UpdatePartsAndReplacesUrl,
                 part,
                 ct); // ✅ #7 ct в API
         }
@@ -138,7 +138,7 @@ namespace PAR.PartsGrabber
             {
                 var parsingPartName = parsingPart.Name.Length > 255 ? parsingPart.Name.Substring(0, 251) + "..." : parsingPart.Name;
                 await _apiService.Post(
-                    _apiServiceOptions.BaseUrl + _apiServiceOptions.AddPartsNamesArchiveUrl,
+                    _apiServiceOptions.PartsRoot + _apiServiceOptions.AddPartsNamesArchiveUrl,
                     new PartsNamesArchive
                     {
                         PartName = parsingPartName,
@@ -158,7 +158,7 @@ namespace PAR.PartsGrabber
                 {
                     ct.ThrowIfCancellationRequested();
                     await _apiService.Post(
-                        _apiServiceOptions.BaseUrl + _apiServiceOptions.AddReplacesArchiveArchiveUrl,
+                        _apiServiceOptions.PartsRoot + _apiServiceOptions.AddReplacesArchiveArchiveUrl,
                         new ReplacesArchive
                         {
                             ReplaceNumber = replace,
@@ -206,7 +206,7 @@ namespace PAR.PartsGrabber
                     {
                         parsingPicture.LocalPath = proccessedImgPath;
                         await _apiService.Post(
-                            _apiServiceOptions.BaseUrl + _apiServiceOptions.AddPartsPicArchiveUrl,
+                            _apiServiceOptions.PartsRoot + _apiServiceOptions.AddPartsPicArchiveUrl,
                             new PartsPicArchive
                             {
                                 PartsAndReplacesId = part.Id,

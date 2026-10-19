@@ -7,7 +7,7 @@ namespace PAR.PartsGrabber;
 
 public class PartsQueueClient(HttpClient http,IOptions<ApiServiceOptions> api,IOptions<ModuleOptions> settings)
 {
-    private string Root=>api.Value.BaseUrl.TrimEnd('/')+"/PartsAndReplaces/continuous";
+    private string Root=>api.Value.PartsRoot+"/PartsAndReplaces/continuous";
     public virtual async Task<List<PartsAndReplace>> ClaimAsync(int slots)
     {
         var config=settings.Value;

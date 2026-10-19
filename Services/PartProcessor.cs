@@ -37,7 +37,7 @@ public sealed class PartProcessor(ProcessParsingResultService saver,IOptions<Mod
             await Task.WhenAll(results.Select(async result=>{
                 await limits.Saves.WaitAsync(saveTimeout.Token);
                 try {
-                    if(result.WithErrorToSave)await api.Post(apiOptions.Value.BaseUrl+apiOptions.Value.SaveErrorUrl,
+                    if(result.WithErrorToSave)await api.Post(apiOptions.Value.ErrorsRoot+apiOptions.Value.SaveErrorUrl,
                         new ErrorLog{error_message=$"Parsing failed for site {result.PartSource.SourceName}{(timedOut?" (timeout)":"")}. Source status is managed by PartsSourceHealthChecker.",script_name="ParsGrabber"},saveTimeout.Token);
                     else await saver.Save(result,part,saveTimeout.Token);
                 }finally{limits.Saves.Release();}

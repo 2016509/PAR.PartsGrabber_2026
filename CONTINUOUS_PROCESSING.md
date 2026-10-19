@@ -73,3 +73,20 @@ No SQL schema migration is required; all lease columns already exist. Source
 changes alone do not modify the server's mounted appsettings.json; include the
 new settings there when deploying, or use their defaults. Start with 2 parts and
 measure queue latency, browser memory and supplier responses before increasing it.
+
+## Microservice endpoints
+
+Configure all four `ServiceUrls` together:
+
+```json
+"ServiceUrls": {
+  "Parts": "http://partsservice/api",
+  "Proxy": "http://proxyservice/api",
+  "PartSource": "http://partsourceservice/api",
+  "ErrorLog": "http://errorlogservice/api"
+}
+```
+
+PartsService owns the continuous queue, renewal, attempts, guarded archive writes, completion and grabber cache reads. Lease validation and each associated write stay in the same SQL transaction; picture metadata is saved through the guarded PartsService endpoint, while image files stay on the existing worker volume.
+
+An incomplete ServiceUrls configuration is rejected. If ServiceUrls is entirely absent, ApiService.BaseUrl remains supported for the existing common-API deployment. Deploy and verify the four APIs before switching the worker. No database migration is required for this routing change; existing lease columns must already be present.

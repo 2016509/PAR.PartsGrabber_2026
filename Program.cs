@@ -133,7 +133,12 @@ namespace PAR.PartsGrabber
 
             services.AddOptions();
 
-            services.AddOptions<ApiServiceOptions>().Bind(configuration.GetSection(ApiServiceOptions.SectionName));
+            services.AddOptions<ApiServiceOptions>().Bind(configuration.GetSection(ApiServiceOptions.SectionName))
+                .Configure(options =>
+                {
+                    configuration.GetSection("ServiceUrls").Bind(options.ServiceUrls);
+                    options.ValidateEndpoints();
+                });
             services.AddOptions<SitesToParseOptions>().Bind(configuration);
             services.AddOptions<SitesToCheckProxyOptions>().Bind(configuration);
             services.AddOptions<ModuleOptions>().Bind(configuration.GetSection(ModuleOptions.SectionName));

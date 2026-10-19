@@ -42,7 +42,7 @@ namespace PAR.PartsGrabber
             try
             {
                 // Запрашиваем данные из Web API
-                var url = $"{_options.BaseUrl}{_options.GetCachedPartData}?partNumber={Uri.EscapeDataString(partNumber)}&sourceSite={Uri.EscapeDataString(targetSource.SourceName)}";
+                var url = $"{_options.PartsRoot}{_options.GetCachedPartData}?partNumber={Uri.EscapeDataString(partNumber)}&sourceSite={Uri.EscapeDataString(targetSource.SourceName)}";
                 var dbData = await _apiService.GetSingle<CachedPartData>(url, ct);
 
                 if (dbData == null)

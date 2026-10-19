@@ -16,6 +16,10 @@
             ?? $"parts-grabber-{Guid.NewGuid():N}";
 
         public int ClaimBatchSize { get; set; } = 1;
+        public int MaxConcurrentParts { get; set; } = 2;
+        public int MaxConcurrentSaves { get; set; } = 2;
+        public int SourceRefreshSeconds { get; set; } = 60;
+        public int PollIntervalMs { get; set; } = 2000;
 
         public int LeaseSeconds { get; set; } = 3600;
 

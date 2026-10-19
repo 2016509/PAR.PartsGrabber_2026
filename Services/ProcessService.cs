@@ -1,232 +1,36 @@
-﻿using KameraData.Data.Models;
+using KameraData.Data.Models;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json;
 using PAR.ParseLib;
-using PAR.PartsGrabber.Options;
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using static System.Runtime.InteropServices.JavaScript.JSType;
 
-namespace PAR.PartsGrabber
+namespace PAR.PartsGrabber;
+
+public sealed class ProcessService(IServiceScopeFactory scopes,SourceProxyProvider sources,PartsQueueClient queue,
+    IOptions<ModuleOptions> options,ModuleMetrics metrics,ILogger logger)
 {
-    public class ProcessService
+    private List<CheckProxyResult>? snapshot;
+    private DateTime refreshAt;
+    private sealed record Work(PartsAndReplace Part,List<CheckProxyResult> Sources);
+    public async Task RunAsync(CancellationToken ct=default)
     {
-        private readonly ProcessParsingResultService _processParsingResultService;
-        private readonly ModuleOptions _options;
-        private readonly ApiServiceOptions _apiServiceOptions;
-        private readonly IApiService _apiService;
-        private readonly ILogger _logger;
-        private readonly IParseService _parseService;
-        private readonly ITelegramNotificationService _telegramService;
-        private readonly ModuleMetrics _moduleMetrics;
-        private readonly SourceProxyProvider _sourceProxyProvider;
-
-        public ProcessService(
-            ProcessParsingResultService processParsingResultService,
-            IOptions<ModuleOptions> options,
-            IOptions<ApiServiceOptions> apiServiceOptions,
-            IApiService apiService,
-            ILogger logger,
-            IParseService parseService,
-            ITelegramNotificationService telegramService,
-            ModuleMetrics moduleMetrics,
-            SourceProxyProvider sourceProxyProvider)
-        {
-            _processParsingResultService = processParsingResultService;
-            _options = options.Value;
-            _apiServiceOptions = apiServiceOptions.Value;
-            _apiService = apiService;
-            _logger = logger;
-            _parseService = parseService;
-            _telegramService = telegramService;
-            _moduleMetrics = moduleMetrics;
-            _sourceProxyProvider = sourceProxyProvider;
+        var runner=new ContinuousRequestRunner<Work>(Math.Max(1,options.Value.MaxConcurrentParts),
+            TimeSpan.FromMilliseconds(Math.Max(100,options.Value.PollIntervalMs)),ClaimAsync,async work=>{
+                using var scope=scopes.CreateScope();
+                await scope.ServiceProvider.GetRequiredService<PartProcessor>().ProcessAsync(work.Part,work.Sources);
+            },ex=>{metrics.ReportApiUnavailable();metrics.ReportError("admission_error");logger.LogError(ex,"PartsGrabber admission or processing failed");});
+        await runner.RunAsync(ct);
+    }
+    private async Task<IReadOnlyList<Work>> ClaimAsync(int slots)
+    {
+        if(snapshot==null||DateTime.UtcNow>=refreshAt) {
+            var loaded=await sources.GetActiveSourceProxiesAsync();
+            if(loaded.Count==0)throw new InvalidOperationException("No source/proxy bindings loaded; no parts claimed.");
+            snapshot=loaded;refreshAt=DateTime.UtcNow.AddSeconds(Math.Max(1,options.Value.SourceRefreshSeconds));
         }
-
-        /// <summary>
-        /// Returns next scheduled run time (UTC).
-        /// </summary>
-        public async Task<DateTime> Process(DateTime nextRunUtc)
-        {
-            if (DateTime.UtcNow <= nextRunUtc)
-                return nextRunUtc;
-            var stopwatch = Stopwatch.StartNew(); // ← для метрик
-
-            var sourceProxies = await _sourceProxyProvider.GetActiveSourceProxiesAsync();
-            if (sourceProxies.Count == 0)
-            {
-                _logger.LogWarning(
-                    "No active source/proxy bindings loaded. RetryInSeconds={RetryInSeconds}",
-                    _options.ApiRetryIntervalSeconds);
-
-                _moduleMetrics.ReportError("no_active_source_proxy_bindings");
-                return DateTime.UtcNow.AddSeconds(_options.ApiRetryIntervalSeconds);
-            }
-
-            var partsFromAPI = await _apiService.PostForList<ClaimPartsAndReplacesRequest, PartsAndReplace>(
-                _apiServiceOptions.BaseUrl + _apiServiceOptions.ClaimPartsAndReplacesUrl,
-                new ClaimPartsAndReplacesRequest
-                {
-                    WorkerId = _options.WorkerId,
-                    BatchSize = _options.ClaimBatchSize,
-                    LeaseSeconds = _options.LeaseSeconds
-                });
-            _moduleMetrics.ReportApiAvailable();
-            int successCount = 0, errorCount = 0; //  Счетчики
-
-            foreach (var part in partsFromAPI)
-            {
-                if (string.IsNullOrEmpty(part.MainPartNumber))
-                {
-                    _moduleMetrics.ReportError("empty_partnumber"); // 
-
-                    _logger.LogInformation("The part with id: {Id} is missing a part number.", part.Id);
-                    continue;
-                }
-                var partStopwatch = Stopwatch.StartNew();
-
-                _logger.LogInformation("START PROCESSING WITH: {Part}", part.MainPartNumber);
-                var processStartTime = DateTime.UtcNow;
-
-                var parsingResults = new List<ParsingPart>();
-                var wasProcessed = false;
-
-                try
-                {
-                    // Жёсткий таймаут 1 минута
-                    using var parseCts = new CancellationTokenSource(TimeSpan.FromMinutes(1));
-                    using var saveCts = new CancellationTokenSource(TimeSpan.FromSeconds(_options.ApiRetryIntervalSeconds));
-
-                    parsingResults = await _parseService.Parse(part.MainPartNumber, sourceProxies, parseCts.Token);
-
-                    // Проверяем таймаут ПОСЛЕ await (partial данные готовы)
-                    bool isTimeout = parseCts.Token.IsCancellationRequested;
-                    if (isTimeout)
-                    {
-                        _logger.LogWarning("Timeout after 1 min for part {Part}. Saving partial results.", part.MainPartNumber);
-                        await _telegramService.SendTimeoutNotificationAsync("Timeout after 1 min for part "+ part.MainPartNumber +". Saving partial results.", processStartTime);
-
-                        // Логика для bool Status + WithErrorToSave
-                        foreach (var result in parsingResults)
-                        {
-                            result.AttempsCount++;  // увеличиваем попытки
-
-                            // Проверяем наличие данных (partial success)
-                            bool hasData = !string.IsNullOrEmpty(result.Name) ||
-                                         result.Replaces.Any() ||
-                                         result.ParsingPictures.Any() ||
-                                         !string.IsNullOrEmpty(result.SitePartNumber) ||
-                                         result.RegularPrice > 0;
-
-                            if (!hasData)
-                            {
-                                result.WithErrorToSave = true;  // empty → error (Status=false)
-                            }
-                            // Иначе: WithErrorToSave=false → success (Status=true), partial данные сохранятся
-                        }
-                    }
-
-                    var tasks = new List<Task>();
-
-                    foreach (var parsingResult in parsingResults)
-                    {
-                        if (parsingResult.WithErrorToSave)
-                        {
-                            tasks.Add(_apiService.Post(
-                                _apiServiceOptions.BaseUrl + _apiServiceOptions.SaveErrorUrl,
-                                new ErrorLog
-                                {
-                                    error_message = $"Parsing failed for site {parsingResult.PartSource.SourceName}{(isTimeout ? " (timeout)" : "")}. Source status is managed by PartsSourceHealthChecker.",
-                                    script_name = "ParsGrabber"
-                                }));
-                        }
-                        else
-                        {
-                            tasks.Add(_processParsingResultService.Save(parsingResult, part, saveCts.Token));
-                        }
-                    }
-
-                    await Task.WhenAll(tasks);
-
-                    var partSources = sourceProxies.Select(x => x.PartSource).ToList();
-                    await _processParsingResultService.UpdatePartsAndReplace(parsingResults, part, partSources, saveCts.Token);
-
-                    wasProcessed = true;
-                }
-                catch (OperationCanceledException ex)
-                {
-                    if (ex.CancellationToken.IsCancellationRequested)
-                    {
-                        _logger.LogWarning("Parse cancelled by timeout for {Part}", part.MainPartNumber);
-                        using var saveCts = new CancellationTokenSource(TimeSpan.FromSeconds(_options.ApiRetryIntervalSeconds));
-                        var partSources = sourceProxies.Select(x => x.PartSource).ToList();
-
-                        await _processParsingResultService.UpdatePartsAndReplace(parsingResults, part, partSources, saveCts.Token);
-                        wasProcessed = true;
-                    }
-                    else
-                    {
-                        throw;  // другие отмены пробрасываем
-                    }
-                }
-                catch (Exception ex) //  В catch
-                {
-                    errorCount++;
-                    _moduleMetrics.ReportPartProcessed(false);
-                    _moduleMetrics.ReportError("parse_error");
-                    _logger.LogError(ex, "ERROR PROCESSING {Part}", part.MainPartNumber);
-
-                    await MarkPartFailedForRetryAsync(part, ex);
-                }
-                finally
-                {
-                    partStopwatch.Stop();
-                    _moduleMetrics.ReportProcessingDuration(partStopwatch.Elapsed.TotalSeconds); // 
-                }
-                if (wasProcessed)
-                {
-                    successCount++;
-                    _moduleMetrics.ReportPartProcessed(true);
-                }
-
-                _logger.LogInformation("END PROCESSING WITH: {Part}", part.MainPartNumber);
-            }
-
-            stopwatch.Stop();
-            _moduleMetrics.ReportProcessingDuration(stopwatch.Elapsed.TotalSeconds);
-            _logger.LogInformation("Cycle: {Success}/{Total} parts, {Duration}s",
-                successCount, partsFromAPI.Count, stopwatch.Elapsed.TotalSeconds);
-
-            _moduleMetrics.UpdateUptime(); //  Uptime
-
-            return DateTime.UtcNow.AddSeconds(Convert.ToDouble(_options.Interval));
-        }
-
-        private async Task MarkPartFailedForRetryAsync(PartsAndReplace part, Exception exception)
-        {
-            try
-            {
-                await _apiService.Post(
-                    $"{_apiServiceOptions.BaseUrl}{_apiServiceOptions.MarkPartsAndReplacesFailedUrl}/{part.Id}",
-                    new MarkPartsAndReplacesFailedRequest
-                    {
-                        WorkerId = _options.WorkerId,
-                        Error = exception.Message,
-                        RetryDelaySeconds = _options.RetryDelaySeconds,
-                        MaxAttempts = _options.MaxAttempts
-                    });
-            }
-            catch (Exception markFailedException)
-            {
-                _logger.LogWarning(
-                    markFailedException,
-                    "Failed to mark part {PartId} for retry after processing error",
-                    part.Id);
-            }
-        }
+        var parts=await queue.ClaimAsync(slots);metrics.ReportApiAvailable();
+        return parts.Select(part=>new Work(part,JsonConvert.DeserializeObject<List<CheckProxyResult>>(
+            JsonConvert.SerializeObject(snapshot,new JsonSerializerSettings{ReferenceLoopHandling=ReferenceLoopHandling.Ignore}))!)).ToArray();
     }
 }

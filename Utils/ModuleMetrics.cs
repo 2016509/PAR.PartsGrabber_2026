@@ -6,6 +6,7 @@ namespace PAR.PartsGrabber
 {
     public class ModuleMetrics
     {
+        public readonly Gauge ActiveParts = Metrics.CreateGauge("partsgrabber_active_parts", "Active parts being processed");
         private readonly ILogger<ModuleMetrics> _logger;
 
         // Основные метрики

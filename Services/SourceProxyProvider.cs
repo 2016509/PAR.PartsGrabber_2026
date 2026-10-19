@@ -30,7 +30,7 @@ namespace PAR.PartsGrabber
             _logger = logger;
         }
 
-        public async Task<List<CheckProxyResult>> GetActiveSourceProxiesAsync(CancellationToken cancellationToken = default)
+        public virtual async Task<List<CheckProxyResult>> GetActiveSourceProxiesAsync(CancellationToken cancellationToken = default)
         {
             var proxies = await _apiService.Get<Proxy>(_apiServiceOptions.BaseUrl + _apiServiceOptions.GetProxiesUrl);
             var activeProxies = proxies

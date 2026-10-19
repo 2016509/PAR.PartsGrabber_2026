@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <None Remove="appsettings.json" />
+    <Compile Remove="Tests/**/*.cs" />
   </ItemGroup>
 
   <ItemGroup>

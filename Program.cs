@@ -1,4 +1,4 @@
-﻿using KameraData.Data.Models;
+using KameraData.Data.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -11,6 +11,7 @@ using Prometheus;
 using Serilog;
 using System.Net;
 using ILogger = Microsoft.Extensions.Logging.ILogger;
+using System.Runtime.InteropServices;
 
 namespace PAR.PartsGrabber
 {
@@ -19,6 +20,7 @@ namespace PAR.PartsGrabber
         static async Task Main(string[] args)
         {
             using var cts = new CancellationTokenSource();
+            using var sigterm = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGTERM, e => { e.Cancel=true; cts.Cancel(); });
             Console.CancelKeyPress += (_, eventArgs) =>
             {
                 eventArgs.Cancel = true;
@@ -45,49 +47,13 @@ namespace PAR.PartsGrabber
             var pw = serviceProvider.GetRequiredService<PlaywrightFetcher>();
             await pw.EnsureStartedAsync();
 
-            var moduleOptions = serviceProvider.GetRequiredService<IOptions<ModuleOptions>>();
-
             ServicePointManager.ServerCertificateValidationCallback = delegate { return true; };
             ServicePointManager.Expect100Continue = false;
             ServicePointManager.DefaultConnectionLimit = 100;
 
-            logger.LogInformation("Press ESC, Ctrl+C, or send SIGTERM to stop");
+            logger.LogInformation("Press Ctrl+C or send SIGTERM to stop");
 
-            var nextRunUtc = DateTime.UtcNow.AddSeconds(Convert.ToDouble(moduleOptions.Value.Interval));
-
-            while (!IsStopRequested(cts.Token))
-            {
-                try
-                {
-                    nextRunUtc = await processService.Process(nextRunUtc);
-                }
-                catch (EntityNotFoundException)
-                {
-                    nextRunUtc = DateTime.UtcNow.AddSeconds(Convert.ToDouble(moduleOptions.Value.Interval));
-                }
-                catch (Exception ex)
-                {
-                    moduleMetrics.ReportApiUnavailable();
-                    moduleMetrics.ReportError("main_loop_error");
-                    logger.LogError(
-                        ex,
-                        "Error in main loop. Module stays alive and will retry after {RetryInSeconds} seconds",
-                        moduleOptions.Value.ApiRetryIntervalSeconds);
-                    nextRunUtc = DateTime.UtcNow.AddSeconds(moduleOptions.Value.ApiRetryIntervalSeconds);
-                }
-                await Task.Delay(200);
-            }
-        }
-
-        private static bool IsStopRequested(CancellationToken cancellationToken)
-        {
-            if (cancellationToken.IsCancellationRequested)
-                return true;
-
-            if (Console.IsInputRedirected)
-                return false;
-
-            return Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Escape;
+            await processService.RunAsync(cts.Token);
         }
 
         private static ServiceCollection Initialize()
@@ -104,6 +70,7 @@ namespace PAR.PartsGrabber
         private static void ConfigureHttpClients(ServiceCollection services)
         {
             services.AddHttpClient<ApiService>();
+            services.AddHttpClient<PartsQueueClient>();
             services.AddHttpClient<ProcessParsingResultService>();
 
             services.AddHttpClient<ITelegramNotificationService, TelegramNotificationService>();
@@ -114,7 +81,10 @@ namespace PAR.PartsGrabber
             services.AddSingleton<DatabasePartsService>();  
             services.AddSingleton<InternalReplacementLookupService>();
 
-            services.AddTransient<IApiService, ApiService>();
+            services.AddTransient<IApiService, LeaseAwareApiService>();
+            services.AddTransient<PartProcessor>();
+            services.AddTransient<HostLimitedParseService>();
+            services.AddSingleton<SharedProcessingLimits>();
             services.AddSingleton<ModuleMetrics>();
             services.AddSingleton<PlaywrightFetcher>();
             services.AddSingleton<SiteProxyCheckerService>();
@@ -128,7 +98,7 @@ namespace PAR.PartsGrabber
             // Регистрируем декоратор
             services.AddTransient<IParseService>(sp =>
              new CachedParseServiceDecorator(
-                 sp.GetRequiredService<ParseService>(),
+                 sp.GetRequiredService<HostLimitedParseService>(),
                  sp.GetRequiredService<DatabasePartsService>(),
                  sp.GetRequiredService<InternalReplacementLookupService>(),
                  sp.GetRequiredService<ILogger>(),
